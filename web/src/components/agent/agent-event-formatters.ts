@@ -505,7 +505,7 @@ export function formatBytes(bytes: number) {
 }
 
 export function isCanvasWriteTool(name: string) {
-    return name === "canvas_apply_ops" || name === "canvas_create_attachment_nodes";
+    return name === "canvas_apply_ops" || name === "canvas_create_attachment_nodes" || name === "canvas_merge_videos";
 }
 
 function parseToolArguments(value: unknown) {

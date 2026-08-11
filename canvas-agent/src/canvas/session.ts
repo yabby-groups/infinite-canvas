@@ -8,7 +8,7 @@ import type { ToolName } from "./schemas.js";
 import { compactCanvasState, compactNode, isToolName, nextCanvasX, parseToolInput } from "./tools.js";
 import type { CanvasSnapshot } from "./types.js";
 
-type PendingRequest = { clientId: string; resolve: (value: unknown) => void; reject: (error: Error) => void };
+type PendingRequest = { clientId: string; name: ToolName; resolve: (value: unknown) => void; reject: (error: Error) => void };
 type TurnAttachment = { clientId: string; id: string; name: string; type: string; size: number; width: number; height: number; dataUrl: string };
 type ReplayEvent = { type: string; payload: Record<string, unknown> };
 export type CodexState = { busy: boolean; threadId: string; turnId: string };
@@ -23,7 +23,7 @@ export type ConversationState = {
     error?: string;
 };
 type McpInventoryItem = { name: string; authStatus?: string };
-export const AGENT_PROTOCOL_VERSION = 6;
+export const AGENT_PROTOCOL_VERSION = 7;
 
 const SITE_TOOLS = new Set<ToolName>([
     "site_navigate",
@@ -32,6 +32,7 @@ const SITE_TOOLS = new Set<ToolName>([
     "workbench_image_generate",
     "workbench_video_get_config",
     "workbench_video_generate",
+    "canvas_merge_videos",
     "prompts_search",
     "assets_list",
     "assets_add",
@@ -381,6 +382,12 @@ export class CanvasSession {
         return true;
     }
 
+    /** 校验浏览器上传的媒体仅归属当前等待中的工具调用。 */
+    isPendingToolRequest(clientId: string, requestId: string, name: ToolName) {
+        const item = this.pending.get(requestId);
+        return Boolean(item && item.clientId === clientId && item.name === name);
+    }
+
     /** 向全部已连接网页广播事件。 */
     emitAll(type: string, payload: unknown) {
         this.clients.forEach((client) => sendEvent(client, type, payload));
@@ -498,8 +505,8 @@ export class CanvasSession {
                 this.pending.delete(requestId);
                 logger.warn("Canvas tool request timed out", { requestId, name, clientId });
                 reject(new Error("画布操作超时"));
-            }, 30000);
-            this.pending.set(requestId, { clientId, resolve: (value) => (clearTimeout(timer), resolve(value)), reject: (error) => (clearTimeout(timer), reject(error)) });
+            }, name === "canvas_merge_videos" ? 300000 : 30000);
+            this.pending.set(requestId, { clientId, name, resolve: (value) => (clearTimeout(timer), resolve(value)), reject: (error) => (clearTimeout(timer), reject(error)) });
         });
     }
 }

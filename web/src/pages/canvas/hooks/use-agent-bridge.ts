@@ -3,8 +3,11 @@ import { useCallback, useEffect, useMemo, useState, type Dispatch, type MutableR
 import i18n from "@/i18n";
 import { useAgentStore } from "@/stores/use-agent-store";
 import { applyCanvasAgentOps, type CanvasAgentOp, type CanvasAgentSnapshot } from "@/lib/canvas/canvas-agent-ops";
+import { videoMetadata } from "@/lib/canvas/canvas-node-factory";
+import { fitNodeSize } from "@/lib/canvas/canvas-node-size";
+import type { UploadedFile } from "@/services/file-storage";
 import type { CanvasNodeGenerationMode } from "@/components/canvas/canvas-node-prompt-panel";
-import type { CanvasConnection, CanvasNodeData, ContextMenuState, ViewportTransform } from "@/types/canvas";
+import { CanvasNodeType, type CanvasConnection, type CanvasNodeData, type ContextMenuState, type ViewportTransform } from "@/types/canvas";
 
 type GenerateNodeRef = MutableRefObject<((nodeId: string, mode: CanvasNodeGenerationMode, prompt: string) => Promise<void>) | null>;
 
@@ -73,6 +76,13 @@ export function useAgentBridge(params: AgentBridgeParams) {
         },
         [projectTitle, projectId],
     );
+    const importMergedVideo = useCallback((video: UploadedFile, sourceNodeIds: string[], title: string) => {
+        const sources = nodesRef.current.filter((node) => sourceNodeIds.includes(node.id));
+        const right = sources.reduce((value, node) => Math.max(value, node.position.x + node.width), 0);
+        const top = sources.length ? Math.min(...sources.map((node) => node.position.y)) : 0;
+        const size = fitNodeSize(video.width || 1280, video.height || 720, 640, 480);
+        return applyAgentOps([{ type: "add_node", nodeType: CanvasNodeType.Video, title: title || "合并视频", position: { x: right + 96, y: top }, width: size.width, height: size.height, metadata: videoMetadata(video) }]);
+    }, [applyAgentOps]);
     const undoAgentOps = useCallback(() => {
         if (!agentUndoSnapshot) return null;
         nodesRef.current = agentUndoSnapshot.nodes;
@@ -90,9 +100,9 @@ export function useAgentBridge(params: AgentBridgeParams) {
     }, [agentUndoSnapshot, projectTitle, projectId]);
 
     useEffect(() => {
-        setAgentCanvasContext({ snapshot: agentSnapshot, applyOps: applyAgentOps, undoOps: undoAgentOps, canUndo: Boolean(agentUndoSnapshot) });
+        setAgentCanvasContext({ snapshot: agentSnapshot, applyOps: applyAgentOps, importMergedVideo, undoOps: undoAgentOps, canUndo: Boolean(agentUndoSnapshot) });
         return () => setAgentCanvasContext(null);
-    }, [agentSnapshot, applyAgentOps, agentUndoSnapshot, setAgentCanvasContext, undoAgentOps]);
+    }, [agentSnapshot, applyAgentOps, agentUndoSnapshot, importMergedVideo, setAgentCanvasContext, undoAgentOps]);
 
     return { applyAgentOps };
 }

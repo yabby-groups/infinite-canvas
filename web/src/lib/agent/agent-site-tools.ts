@@ -3,6 +3,8 @@ import type { NavigateFunction } from "react-router-dom";
 import i18n from "@/i18n";
 import { fetchPrompts } from "@/services/api/prompts";
 import { uploadImage } from "@/services/image-storage";
+import { getMediaBlob, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
+import { saveAs } from "file-saver";
 import { imageAspectOptions, imageQualityOptions } from "@/components/image-settings-panel";
 import { videoResolutionOptions, videoSecondOptions, videoSizeOptions } from "@/components/video-settings-panel";
 import type { CanvasAgentSnapshot } from "@/lib/canvas/canvas-agent-ops";
@@ -21,6 +23,7 @@ export const SITE_TOOL_NAMES = [
     "workbench_image_generate",
     "workbench_video_get_config",
     "workbench_video_generate",
+    "canvas_merge_videos",
     "prompts_search",
     "assets_list",
     "assets_add",
@@ -43,17 +46,19 @@ export const SITE_TOOL_LABELS: Record<SiteToolName, string> = {
     get workbench_image_generate() { return siteText("imageGenerate"); },
     get workbench_video_get_config() { return siteText("videoConfig"); },
     get workbench_video_generate() { return siteText("videoGenerate"); },
+    get canvas_merge_videos() { return siteText("videoMerge"); },
     get prompts_search() { return siteText("promptSearch"); },
     get assets_list() { return siteText("assetList"); },
     get assets_add() { return siteText("assetAdd"); },
 };
 
 type SiteToolInput = Record<string, unknown>;
-type SiteToolContext = { canvasSnapshot?: CanvasAgentSnapshot | null };
+type SiteToolContext = { canvasSnapshot?: CanvasAgentSnapshot | null; importMergedVideo?: (video: UploadedFile, sourceNodeIds: string[], title: string) => CanvasAgentSnapshot };
+type SiteToolRequest = { endpoint: string; token: string; clientId: string; requestId: string };
 type GenerationStatus = "idle" | "queued" | "running" | "succeeded" | "failed";
 type GenerationStatusItem = { id: string; source: "canvas" | "image" | "video"; status: GenerationStatus; kind?: string; title?: string; prompt?: string; projectId?: string; createdAt?: string; updatedAt?: string; successCount?: number; failCount?: number; error?: string };
 
-export async function runSiteTool(name: SiteToolName, input: SiteToolInput, navigate: NavigateFunction, context: SiteToolContext = {}): Promise<unknown> {
+export async function runSiteTool(name: SiteToolName, input: SiteToolInput, navigate: NavigateFunction, context: SiteToolContext = {}, request?: SiteToolRequest): Promise<unknown> {
     switch (name) {
         case "canvas_list_projects":
             return listCanvasProjects(input);
@@ -67,6 +72,8 @@ export async function runSiteTool(name: SiteToolName, input: SiteToolInput, navi
             return getVideoConfig();
         case "workbench_video_generate":
             return runVideoWorkbench(input, navigate);
+        case "canvas_merge_videos":
+            return mergeCanvasVideos(input, context, request);
         case "prompts_search":
             return searchPrompts(input);
         case "assets_list":
@@ -76,6 +83,46 @@ export async function runSiteTool(name: SiteToolName, input: SiteToolInput, navi
         default:
             throw new Error(siteText("unknownTool", { name }));
     }
+}
+
+async function mergeCanvasVideos(input: SiteToolInput, context: SiteToolContext, request?: SiteToolRequest) {
+    if (!request || !context.canvasSnapshot || !context.importMergedVideo) throw new Error(siteText("videoMergeCanvasRequired"));
+    const nodeIds = Array.isArray(input.nodeIds) ? input.nodeIds.filter((value): value is string => typeof value === "string") : [];
+    if (nodeIds.length < 2) throw new Error(siteText("videoMergeCount"));
+    const nodes = nodeIds.map((id) => context.canvasSnapshot?.nodes.find((node) => node.id === id));
+    if (nodes.some((node) => node?.type !== "video" || !node.metadata?.storageKey)) throw new Error(siteText("videoMergeUnavailable"));
+    const transition = input.transition === "fade" ? "fade" : "cut";
+    const transitionDurationMs = Number(input.transitionDurationMs);
+    const base = `${request.endpoint.replace(/\/$/, "")}/agent/video-merge/${encodeURIComponent(request.requestId)}`;
+    const query = `?token=${encodeURIComponent(request.token)}&clientId=${encodeURIComponent(request.clientId)}`;
+    let started = false;
+    try {
+        const start = await fetch(`${base}/start${query}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ nodeIds, transition, ...(Number.isFinite(transitionDurationMs) ? { transitionDurationMs } : {}) }) });
+        if (!start.ok) throw new Error(await agentError(start));
+        started = true;
+        const blobs = await Promise.all(nodes.map(async (node) => getMediaBlob(node!.metadata!.storageKey!)));
+        if (!blobs.every((blob): blob is Blob => Boolean(blob))) throw new Error(siteText("videoMergeUnavailable"));
+        for (const [index, blob] of blobs.entries()) {
+            const response = await fetch(`${base}/input/${index}${query}`, { method: "PUT", headers: { "content-type": "application/octet-stream" }, body: blob });
+            if (!response.ok) throw new Error(await agentError(response));
+        }
+        const complete = await fetch(`${base}/complete${query}`, { method: "POST" });
+        if (!complete.ok) throw new Error(await agentError(complete));
+        started = false;
+        const video = await uploadMediaFile(await complete.blob(), "video");
+        const title = typeof input.title === "string" && input.title.trim() ? input.title.trim() : "合并视频";
+        const snapshot = context.importMergedVideo(video, nodeIds, title);
+        const filename = `${title.replace(/[\\/:*?\"<>|]/g, "-")}.mp4`;
+        saveAs(video.url, filename);
+        return { ok: true, nodeId: snapshot.selectedNodeIds.at(-1), title, durationMs: video.durationMs, width: video.width, height: video.height, downloaded: true };
+    } finally {
+        if (started) void fetch(`${base}/abort${query}`, { method: "POST" });
+    }
+}
+
+async function agentError(response: Response) {
+    const data = await response.json().catch(() => null) as { error?: string } | null;
+    return data?.error || siteText("videoMergeFailed");
 }
 
 function getGenerationStatus(input: SiteToolInput, canvasSnapshot?: CanvasAgentSnapshot | null) {

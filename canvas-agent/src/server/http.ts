@@ -13,6 +13,7 @@ import { DEFAULT_PORT, ensureSiteWorkspace, loadConfig, saveConfig, updateSiteWo
 import { logger } from "../utils/logger.js";
 import { checkVersions } from "../version-check.js";
 import { SkillStore, SkillStoreError } from "../skills/store.js";
+import { mergeVideos, type VideoMergeOptions } from "../video-merge.js";
 
 /** 启动仅监听本机的 Canvas Agent HTTP 服务。 */
 export function startHttpServer() {
@@ -102,6 +103,7 @@ export function startHttpServer() {
         emit("agent_bootstrap", { type: "codex.prepare_failed", threadId, sourceClientId: clientId || undefined, error: text });
     };
     const app = express();
+    const videoMerges = new Map<string, { clientId: string; nodeIds: string[]; options: VideoMergeOptions; blobs: Map<number, Buffer> }>();
     app.disable("x-powered-by");
     app.use(express.json({ limit: "30mb" }));
     app.use((req, res, next) => {
@@ -141,6 +143,47 @@ export function startHttpServer() {
         const ok = session.resolveResult(String(req.query.clientId || ""), req.body);
         res.status(ok ? 200 : 409).json({ ok });
     });
+    app.post("/agent/video-merge/:requestId/start", route(async (req, res) => {
+        const requestId = routeParam(req.params.requestId);
+        const clientId = String(req.query.clientId || "");
+        if (!session.isPendingToolRequest(clientId, requestId, "canvas_merge_videos")) return void res.status(409).json({ ok: false, error: "视频合并请求已失效" });
+        const nodeIds = Array.isArray(req.body?.nodeIds) ? req.body.nodeIds.filter((value: unknown): value is string => typeof value === "string") : [];
+        if (nodeIds.length < 2) return void res.status(400).json({ ok: false, error: "至少需要两个视频片段" });
+        const transition = req.body?.transition === "fade" ? "fade" : "cut";
+        const transitionDurationMs = Number(req.body?.transitionDurationMs);
+        videoMerges.set(requestId, { clientId, nodeIds, options: { transition, ...(Number.isFinite(transitionDurationMs) ? { transitionDurationMs } : {}) }, blobs: new Map() });
+        const expiry = setTimeout(() => videoMerges.delete(requestId), 300000);
+        expiry.unref();
+        res.json({ ok: true });
+    }));
+    app.put("/agent/video-merge/:requestId/input/:index", express.raw({ type: "application/octet-stream", limit: "500mb" }), route(async (req, res) => {
+        const requestId = routeParam(req.params.requestId);
+        const merge = videoMerges.get(requestId);
+        const index = Number(routeParam(req.params.index));
+        if (!merge || merge.clientId !== String(req.query.clientId || "") || !Number.isInteger(index) || index < 0 || index >= merge.nodeIds.length || !Buffer.isBuffer(req.body) || !req.body.length) return void res.status(400).json({ ok: false, error: "视频片段无效" });
+        merge.blobs.set(index, req.body);
+        res.json({ ok: true });
+    }));
+    app.post("/agent/video-merge/:requestId/abort", route(async (req, res) => {
+        const requestId = routeParam(req.params.requestId);
+        const merge = videoMerges.get(requestId);
+        if (!merge || merge.clientId !== String(req.query.clientId || "")) return void res.status(409).json({ ok: false, error: "视频合并请求已失效" });
+        videoMerges.delete(requestId);
+        res.json({ ok: true });
+    }));
+    app.post("/agent/video-merge/:requestId/complete", route(async (req, res) => {
+        const requestId = routeParam(req.params.requestId);
+        const merge = videoMerges.get(requestId);
+        if (!merge || merge.clientId !== String(req.query.clientId || "")) return void res.status(409).json({ ok: false, error: "视频合并请求已失效" });
+        videoMerges.delete(requestId);
+        if (merge.blobs.size !== merge.nodeIds.length) return void res.status(400).json({ ok: false, error: "视频片段未上传完成" });
+        const result = await mergeVideos(merge.nodeIds.map((_, index) => merge.blobs.get(index)!), merge.options);
+        res.setHeader("Cache-Control", "no-store");
+        res.setHeader("X-Video-Width", String(result.width));
+        res.setHeader("X-Video-Height", String(result.height));
+        res.setHeader("X-Video-Duration-Ms", String(result.durationMs));
+        res.type("video/mp4").send(result.data);
+    }));
     app.get("/agent/attachments/:attachmentId", route(async (req, res) => {
         const attachment = session.getTurnAttachment(String(req.query.clientId || ""), routeParam(req.params.attachmentId));
         const data = attachment.dataUrl.split(",", 2)[1];
@@ -522,7 +565,7 @@ function setCors(req: Request, res: Response, url: URL, config: CanvasAgentConfi
     const origin = req.headers.origin;
     res.setHeader("Access-Control-Allow-Origin", origin || "*");
     res.setHeader("Access-Control-Allow-Headers", "content-type,x-canvas-agent-token");
-    res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+    res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,OPTIONS");
     res.setHeader("Access-Control-Allow-Private-Network", "true");
     if (!origin || req.method === "OPTIONS" || url.pathname === "/health" || url.pathname === "/config") return true;
     config.origins ||= [];
