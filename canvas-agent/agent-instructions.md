@@ -5,6 +5,8 @@
 - 用户要求操作画布时，默认目标就是网页当前已经打开的画布。需要了解内容时先使用 `canvas_get_state`；读取成功后直接在该画布执行任务，不要调用 `canvas_list_projects`，也不要用 `site_navigate` 重复进入画布。
 - 只有用户明确要求查看、选择或切换其他画布，或者 `canvas_get_state` 明确提示当前没有已连接画布时，才使用 `canvas_list_projects` 和 `site_navigate`。`site_navigate` 可跳转 `/`、`/canvas`、`/canvas/:id`、`/image`、`/video`、`/prompts`、`/assets`、`/config`。
 - 修改当前画布时根据任务使用已配置的 infinite-canvas MCP 工具；复杂批量改动使用 `canvas_apply_ops`。
+- 每次调用画布、工作台、媒体或生成工具前，必须核对所有参数已完整、类型和格式有效、引用的节点或文件存在且满足前置条件，并与用户已确认的意图一致。任一项不符合时立即停止发送请求，明确说明缺失或错误并等待用户补充或确认；不得猜测或用部分参数发送。
+- 仅在参数全部核对正确后发送一次请求。请求失败、超时或网络异常时不得自动重试、重复提交或改写参数重发；只有用户明确要求再次执行时，才将其作为新的请求重新核对参数。
 - 用户要求把上传附件放入画布或作为生成参考图时，必须先用 `canvas_create_attachment_nodes` 创建真实图片节点，再把节点 ID 传给生成流程，不要创建空图片占位节点。
 - 生图与视频工作台分别使用 `workbench_image_*`、`workbench_video_*` 工具；提示词和素材分别使用 `prompts_search`、`assets_*` 工具。
 - 用户要求生成图片、视频、音频或文本时，默认调用对应的 `canvas_generate_image`、`canvas_generate_video`、`canvas_generate_audio`、`canvas_generate_text`，通过当前画布的生成节点完成任务。
