@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useState, type Dispatch, type MutableR
 import i18n from "@/i18n";
 import { useAgentStore } from "@/stores/use-agent-store";
 import { applyCanvasAgentOps, type CanvasAgentOp, type CanvasAgentSnapshot } from "@/lib/canvas/canvas-agent-ops";
-import { videoMetadata } from "@/lib/canvas/canvas-node-factory";
+import { audioMetadata, videoMetadata } from "@/lib/canvas/canvas-node-factory";
 import { fitNodeSize } from "@/lib/canvas/canvas-node-size";
 import type { UploadedFile } from "@/services/file-storage";
 import type { CanvasNodeGenerationMode } from "@/components/canvas/canvas-node-prompt-panel";
@@ -76,12 +76,13 @@ export function useAgentBridge(params: AgentBridgeParams) {
         },
         [projectTitle, projectId],
     );
-    const importMergedVideo = useCallback((video: UploadedFile, sourceNodeIds: string[], title: string) => {
+    const importMedia = useCallback((media: UploadedFile, sourceNodeIds: string[], title: string) => {
         const sources = nodesRef.current.filter((node) => sourceNodeIds.includes(node.id));
         const right = sources.reduce((value, node) => Math.max(value, node.position.x + node.width), 0);
         const top = sources.length ? Math.min(...sources.map((node) => node.position.y)) : 0;
-        const size = fitNodeSize(video.width || 1280, video.height || 720, 640, 480);
-        return applyAgentOps([{ type: "add_node", nodeType: CanvasNodeType.Video, title: title || "合并视频", position: { x: right + 96, y: top }, width: size.width, height: size.height, metadata: videoMetadata(video) }]);
+        const audio = media.mimeType.startsWith("audio/");
+        const size = audio ? { width: 280, height: 120 } : fitNodeSize(media.width || 1280, media.height || 720, 640, 480);
+        return applyAgentOps([{ type: "add_node", nodeType: audio ? CanvasNodeType.Audio : CanvasNodeType.Video, title: title || (audio ? "生成音频" : "剪辑视频"), position: { x: right + 96, y: top }, width: size.width, height: size.height, metadata: audio ? audioMetadata(media) : videoMetadata(media) }]);
     }, [applyAgentOps]);
     const undoAgentOps = useCallback(() => {
         if (!agentUndoSnapshot) return null;
@@ -100,9 +101,9 @@ export function useAgentBridge(params: AgentBridgeParams) {
     }, [agentUndoSnapshot, projectTitle, projectId]);
 
     useEffect(() => {
-        setAgentCanvasContext({ snapshot: agentSnapshot, applyOps: applyAgentOps, importMergedVideo, undoOps: undoAgentOps, canUndo: Boolean(agentUndoSnapshot) });
+        setAgentCanvasContext({ snapshot: agentSnapshot, applyOps: applyAgentOps, importMedia, undoOps: undoAgentOps, canUndo: Boolean(agentUndoSnapshot) });
         return () => setAgentCanvasContext(null);
-    }, [agentSnapshot, applyAgentOps, agentUndoSnapshot, importMergedVideo, setAgentCanvasContext, undoAgentOps]);
+    }, [agentSnapshot, applyAgentOps, agentUndoSnapshot, importMedia, setAgentCanvasContext, undoAgentOps]);
 
     return { applyAgentOps };
 }

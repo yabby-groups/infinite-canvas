@@ -23,7 +23,7 @@ export type ConversationState = {
     error?: string;
 };
 type McpInventoryItem = { name: string; authStatus?: string };
-export const AGENT_PROTOCOL_VERSION = 7;
+export const AGENT_PROTOCOL_VERSION = 8;
 
 const SITE_TOOLS = new Set<ToolName>([
     "site_navigate",
@@ -33,6 +33,10 @@ const SITE_TOOLS = new Set<ToolName>([
     "workbench_video_get_config",
     "workbench_video_generate",
     "canvas_merge_videos",
+    "canvas_inspect_media",
+    "canvas_render_media",
+    "canvas_generate_tts",
+    "canvas_transcribe_media",
     "prompts_search",
     "assets_list",
     "assets_add",
@@ -505,7 +509,7 @@ export class CanvasSession {
                 this.pending.delete(requestId);
                 logger.warn("Canvas tool request timed out", { requestId, name, clientId });
                 reject(new Error("画布操作超时"));
-            }, name === "canvas_merge_videos" ? 300000 : 30000);
+            }, ["canvas_merge_videos", "canvas_render_media"].includes(name) ? 300000 : 30000);
             this.pending.set(requestId, { clientId, name, resolve: (value) => (clearTimeout(timer), resolve(value)), reject: (error) => (clearTimeout(timer), reject(error)) });
         });
     }

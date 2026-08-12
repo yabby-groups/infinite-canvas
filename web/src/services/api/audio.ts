@@ -66,6 +66,27 @@ export async function requestAudioGeneration(config: AiConfig, prompt: string, o
     }
 }
 
+/** Transcribe a local media Blob with the browser's existing OpenAI-compatible configuration. */
+export async function requestAudioTranscription(config: AiConfig, file: Blob, name = "audio.m4a", options?: RequestOptions) {
+    const requestConfig = resolveModelRequestConfig(config, config.model || config.audioModel);
+    const model = requestConfig.model.trim();
+    if (!model) throw new Error(apiText("audioModelRequired"));
+    if (!requestConfig.baseUrl.trim()) throw new Error(apiText("baseUrlRequired"));
+    if (!requestConfig.apiKey.trim()) throw new Error(apiText("apiKeyRequired"));
+    const body = new FormData();
+    body.set("file", new File([file], name, { type: file.type || "audio/mp4" }));
+    body.set("model", model);
+    body.set("response_format", "json");
+    try {
+        const response = await axios.post<{ text?: string }>(aiApiUrl(requestConfig, "/audio/transcriptions"), body, { headers: { Authorization: `Bearer ${requestConfig.apiKey}` }, signal: options?.signal });
+        const text = response.data?.text?.trim();
+        if (!text) throw new Error("音频转写未返回文本");
+        return text;
+    } catch (error) {
+        throw new Error(readAxiosError(error, "音频转写失败"));
+    }
+}
+
 async function audioPluginBlob(result: unknown, format: string): Promise<Blob> {
     if (result instanceof Blob) return result.type.startsWith("audio/") ? result : new Blob([result], { type: audioMimeType(format) });
     let source = "";

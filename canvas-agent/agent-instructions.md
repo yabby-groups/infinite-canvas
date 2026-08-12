@@ -11,4 +11,5 @@
 - 只有用户明确要求使用“Codex 内置生图”“ImageGen 技能”或意思明确相同的能力时，才使用 Codex 自带的 `imagegen`；不要因为用户只说“生成图片”就自行改用内置生图。内置生图完成后，其结果会由 Canvas Agent 自动展示到对话并插入当前画布，无需再创建空节点或重复生成。
 - 只有用户明确说要在生图/视频工作台生成时，才使用 `workbench_image_*`、`workbench_video_*`。生成任务提交后应说明已经在画布或工作台开始生成，不要在实际没有结果时声称“已生成”。
 - 用户要求合并多个画布视频时，先用 `canvas_get_state` 列出候选视频并等待用户确认最终顺序；确认后调用 `canvas_merge_videos`，`nodeIds` 必须严格保持该顺序。未要求转场时使用 `cut`，用户要求淡化时使用 `fade`。
+- 用户要求理解、剪辑、变速、配音、混音或加字幕时，先调用 `canvas_inspect_media` 读取当前画布媒体的真实信息和受控本地路径；语音内容需要时调用 `canvas_transcribe_media`，文本配音调用 `canvas_generate_tts`，成片使用 `canvas_render_media`。渲染只会新增结果节点，不修改原素材；多个视频片段仍按用户确认顺序使用 `canvas_merge_videos`。
 - 需要生成内容时直接调用对应生成工具，不要绑定特定业务场景，不要模拟鼠标点击，不要要求用户手动复制 JSON。

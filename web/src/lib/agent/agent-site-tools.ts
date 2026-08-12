@@ -2,8 +2,9 @@ import type { NavigateFunction } from "react-router-dom";
 
 import i18n from "@/i18n";
 import { fetchPrompts } from "@/services/api/prompts";
-import { uploadImage } from "@/services/image-storage";
+import { getImageBlob, uploadImage } from "@/services/image-storage";
 import { getMediaBlob, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
+import { requestAudioGeneration, requestAudioTranscription, storeGeneratedAudio } from "@/services/api/audio";
 import { saveAs } from "file-saver";
 import { imageAspectOptions, imageQualityOptions } from "@/components/image-settings-panel";
 import { videoResolutionOptions, videoSecondOptions, videoSizeOptions } from "@/components/video-settings-panel";
@@ -24,6 +25,10 @@ export const SITE_TOOL_NAMES = [
     "workbench_video_get_config",
     "workbench_video_generate",
     "canvas_merge_videos",
+    "canvas_inspect_media",
+    "canvas_render_media",
+    "canvas_generate_tts",
+    "canvas_transcribe_media",
     "prompts_search",
     "assets_list",
     "assets_add",
@@ -47,13 +52,17 @@ export const SITE_TOOL_LABELS: Record<SiteToolName, string> = {
     get workbench_video_get_config() { return siteText("videoConfig"); },
     get workbench_video_generate() { return siteText("videoGenerate"); },
     get canvas_merge_videos() { return siteText("videoMerge"); },
+    get canvas_inspect_media() { return siteText("mediaInspect"); },
+    get canvas_render_media() { return siteText("mediaRender"); },
+    get canvas_generate_tts() { return siteText("mediaTts"); },
+    get canvas_transcribe_media() { return siteText("mediaTranscribe"); },
     get prompts_search() { return siteText("promptSearch"); },
     get assets_list() { return siteText("assetList"); },
     get assets_add() { return siteText("assetAdd"); },
 };
 
 type SiteToolInput = Record<string, unknown>;
-type SiteToolContext = { canvasSnapshot?: CanvasAgentSnapshot | null; importMergedVideo?: (video: UploadedFile, sourceNodeIds: string[], title: string) => CanvasAgentSnapshot };
+type SiteToolContext = { canvasSnapshot?: CanvasAgentSnapshot | null; importMedia?: (media: UploadedFile, sourceNodeIds: string[], title: string) => CanvasAgentSnapshot };
 type SiteToolRequest = { endpoint: string; token: string; clientId: string; requestId: string };
 type GenerationStatus = "idle" | "queued" | "running" | "succeeded" | "failed";
 type GenerationStatusItem = { id: string; source: "canvas" | "image" | "video"; status: GenerationStatus; kind?: string; title?: string; prompt?: string; projectId?: string; createdAt?: string; updatedAt?: string; successCount?: number; failCount?: number; error?: string };
@@ -74,6 +83,14 @@ export async function runSiteTool(name: SiteToolName, input: SiteToolInput, navi
             return runVideoWorkbench(input, navigate);
         case "canvas_merge_videos":
             return mergeCanvasVideos(input, context, request);
+        case "canvas_inspect_media":
+            return inspectCanvasMedia(input, context, request);
+        case "canvas_render_media":
+            return renderCanvasMedia(input, context, request);
+        case "canvas_generate_tts":
+            return generateCanvasTts(input, context);
+        case "canvas_transcribe_media":
+            return transcribeCanvasMedia(input, context, request);
         case "prompts_search":
             return searchPrompts(input);
         case "assets_list":
@@ -86,7 +103,7 @@ export async function runSiteTool(name: SiteToolName, input: SiteToolInput, navi
 }
 
 async function mergeCanvasVideos(input: SiteToolInput, context: SiteToolContext, request?: SiteToolRequest) {
-    if (!request || !context.canvasSnapshot || !context.importMergedVideo) throw new Error(siteText("videoMergeCanvasRequired"));
+    if (!request || !context.canvasSnapshot || !context.importMedia) throw new Error(siteText("videoMergeCanvasRequired"));
     const nodeIds = Array.isArray(input.nodeIds) ? input.nodeIds.filter((value): value is string => typeof value === "string") : [];
     if (nodeIds.length < 2) throw new Error(siteText("videoMergeCount"));
     const nodes = nodeIds.map((id) => context.canvasSnapshot?.nodes.find((node) => node.id === id));
@@ -111,13 +128,87 @@ async function mergeCanvasVideos(input: SiteToolInput, context: SiteToolContext,
         started = false;
         const video = await uploadMediaFile(await complete.blob(), "video");
         const title = typeof input.title === "string" && input.title.trim() ? input.title.trim() : "合并视频";
-        const snapshot = context.importMergedVideo(video, nodeIds, title);
+        const snapshot = context.importMedia(video, nodeIds, title);
         const filename = `${title.replace(/[\\/:*?\"<>|]/g, "-")}.mp4`;
         saveAs(video.url, filename);
         return { ok: true, nodeId: snapshot.selectedNodeIds.at(-1), title, durationMs: video.durationMs, width: video.width, height: video.height, downloaded: true };
     } finally {
         if (started) void fetch(`${base}/abort${query}`, { method: "POST" });
     }
+}
+
+async function inspectCanvasMedia(input: SiteToolInput, context: SiteToolContext, request?: SiteToolRequest) {
+    const nodes = mediaNodes(input, context);
+    const result = await transferMedia("inspect", nodes, request);
+    return result as { items: unknown[] };
+}
+
+async function renderCanvasMedia(input: SiteToolInput, context: SiteToolContext, request?: SiteToolRequest) {
+    if (!context.importMedia) throw new Error(siteText("mediaCanvasRequired"));
+    const nodeIds = Array.isArray(input.nodeIds) ? input.nodeIds.filter((value): value is string => typeof value === "string") : [];
+    const nodes = mediaNodes({ nodeIds }, context);
+    const videoNodeId = typeof input.videoNodeId === "string" ? input.videoNodeId : "";
+    const videoIndex = nodes.findIndex((node) => node.id === videoNodeId);
+    if (videoIndex < 0 || nodes[videoIndex].type !== "video") throw new Error(siteText("mediaVideoRequired"));
+    const audioIds = new Set(Array.isArray(input.audioNodeIds) ? input.audioNodeIds.filter((value): value is string => typeof value === "string") : []);
+    const audioIndexes = nodes.flatMap((node, index) => audioIds.has(node.id) && node.type === "audio" ? [index] : []);
+    const response = await transferMedia("render", nodes, request, { videoIndex, audioIndexes, trimStartMs: numberValue(input.trimStartMs), trimEndMs: numberValue(input.trimEndMs), speed: numberValue(input.speed), volume: numberValue(input.volume), mute: input.mute === true, filter: ["grayscale", "sepia", "contrast"].includes(String(input.filter)) ? input.filter : "none", subtitleText: typeof input.subtitleText === "string" ? input.subtitleText : undefined });
+    const title = typeof input.title === "string" && input.title.trim() ? input.title.trim() : "剪辑视频";
+    const blob = response as Blob;
+    const video = await uploadMediaFile(blob, "video");
+    const snapshot = context.importMedia(video, nodes.map((node) => node.id), title);
+    return { ok: true, nodeId: snapshot.selectedNodeIds.at(-1), title, durationMs: video.durationMs, width: video.width, height: video.height };
+}
+
+async function generateCanvasTts(input: SiteToolInput, context: SiteToolContext) {
+    if (!context.importMedia) throw new Error(siteText("mediaCanvasRequired"));
+    const text = typeof input.text === "string" ? input.text.trim() : "";
+    if (!text) throw new Error(siteText("mediaTextRequired"));
+    const config = useConfigStore.getState().config;
+    const audio = await storeGeneratedAudio(await requestAudioGeneration(config, text), config.audioFormat);
+    const title = typeof input.title === "string" && input.title.trim() ? input.title.trim() : "配音";
+    const snapshot = context.importMedia(audio, [], title);
+    return { ok: true, nodeId: snapshot.selectedNodeIds.at(-1), title, durationMs: audio.durationMs };
+}
+
+async function transcribeCanvasMedia(input: SiteToolInput, context: SiteToolContext, request?: SiteToolRequest) {
+    const nodeId = typeof input.nodeId === "string" ? input.nodeId : "";
+    const node = mediaNodes({ nodeIds: [nodeId] }, context)[0];
+    if (node.type !== "audio" && node.type !== "video") throw new Error(siteText("mediaAudioRequired"));
+    const audio = await transferMedia("transcribe", [node], request) as Blob;
+    const text = await requestAudioTranscription(useConfigStore.getState().config, audio, `${node.title || "media"}.m4a`);
+    return { nodeId, text };
+}
+
+function mediaNodes(input: SiteToolInput, context: SiteToolContext) {
+    if (!context.canvasSnapshot) throw new Error(siteText("mediaCanvasRequired"));
+    const ids = Array.isArray(input.nodeIds) ? input.nodeIds.filter((value): value is string => typeof value === "string") : [];
+    const nodes = context.canvasSnapshot.nodes.filter((node) => (!ids.length || ids.includes(node.id)) && ["image", "video", "audio"].includes(node.type) && node.metadata?.storageKey);
+    if (!nodes.length || (ids.length && nodes.length !== ids.length)) throw new Error(siteText("mediaUnavailable"));
+    return nodes;
+}
+
+async function transferMedia(operation: "inspect" | "render" | "transcribe", nodes: CanvasAgentSnapshot["nodes"], request: SiteToolRequest | undefined, options?: Record<string, unknown>) {
+    if (!request) throw new Error(siteText("mediaCanvasRequired"));
+    const base = `${request.endpoint.replace(/\/$/, "")}/agent/media/${encodeURIComponent(request.requestId)}`;
+    const query = `?token=${encodeURIComponent(request.token)}&clientId=${encodeURIComponent(request.clientId)}`;
+    const start = await fetch(`${base}/start${query}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ operation, nodeIds: nodes.map((node) => node.id) }) });
+    if (!start.ok) throw new Error(await agentError(start));
+    const blobs = await Promise.all(nodes.map(async (node) => node.metadata?.storageKey?.startsWith("image:") ? getImageBlob(node.metadata.storageKey) : getMediaBlob(node.metadata!.storageKey!)));
+    if (!blobs.every((blob): blob is Blob => Boolean(blob))) throw new Error(siteText("mediaUnavailable"));
+    for (const [index, blob] of blobs.entries()) {
+        const node = nodes[index];
+        const response = await fetch(`${base}/input/${index}${query}`, { method: "PUT", headers: { "content-type": "application/octet-stream", "x-media-name": encodeURIComponent(node.title || `${node.type}-${index + 1}`), "x-media-type": blob.type || node.metadata?.mimeType || "application/octet-stream" }, body: blob });
+        if (!response.ok) throw new Error(await agentError(response));
+    }
+    const complete = await fetch(`${base}/complete${query}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ operation, options }) });
+    if (!complete.ok) throw new Error(await agentError(complete));
+    return operation === "inspect" ? await complete.json() : await complete.blob();
+}
+
+function numberValue(value: unknown) {
+    const result = Number(value);
+    return Number.isFinite(result) ? result : undefined;
 }
 
 async function agentError(response: Response) {

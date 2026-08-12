@@ -71,7 +71,7 @@ const MAX_ATTACHMENT_PAYLOAD_BYTES = 28 * 1024 * 1024;
 const MESSAGE_PREVIEW_LONG_EDGE = 192;
 const MESSAGE_PREVIEW_MAX_LENGTH = 500_000;
 const DEFAULT_AGENT_URL = "http://127.0.0.1:17371";
-const AGENT_PROTOCOL_VERSION = 7;
+const AGENT_PROTOCOL_VERSION = 8;
 const HISTORY_RETRY_DELAYS_MS = [0, 150, 350, 700, 1200];
 const AGENT_REASONING_EFFORTS = new Set<AgentReasoningEffort>(["minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
 const rt = (key: string, options?: Record<string, unknown>) => i18n.t(`agent.runtime.${key}`, options);
@@ -787,7 +787,7 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
     };
 
     const handleToolCall = async (endpoint: string, token: string, payload: AgentPendingToolCall) => {
-        if (confirmToolsRef.current && isCanvasWriteTool(payload.name)) {
+        if (confirmToolsRef.current && isCanvasWriteTool(payload.name) && !isAutomaticMediaTool(payload.name)) {
             if (pendingToolRef.current) {
                 await postToolResult(endpoint, token, clientIdRef.current, { requestId: payload.requestId, error: rt("pendingCanvasTool") });
                 return;
@@ -805,7 +805,7 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
             try {
                 addEventLog(toolName(payload.name), payload, payload);
                 const context = canvasContextRef.current;
-                const result = await runSiteTool(payload.name, payload.input || {}, navigate, { canvasSnapshot: context?.snapshot || null, importMergedVideo: context?.importMergedVideo }, { endpoint, token, clientId: clientIdRef.current, requestId: payload.requestId });
+                const result = await runSiteTool(payload.name, payload.input || {}, navigate, { canvasSnapshot: context?.snapshot || null, importMedia: context?.importMedia }, { endpoint, token, clientId: clientIdRef.current, requestId: payload.requestId });
                 await postToolResult(endpoint, token, clientIdRef.current, { requestId: payload.requestId, result });
                 addEventLog(rt("toolCompleted", { tool: toolName(payload.name) }), result, result);
             } catch (error) {
@@ -1524,6 +1524,10 @@ async function attachmentNodeOps(endpoint: string, token: string, clientId: stri
 
 function createId() {
     return randomId();
+}
+
+function isAutomaticMediaTool(name: string) {
+    return ["canvas_inspect_media", "canvas_render_media", "canvas_generate_tts", "canvas_transcribe_media"].includes(name);
 }
 
 async function createMessageAttachmentMetadata(item: AgentAttachment) {

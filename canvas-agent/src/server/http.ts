@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { readFile, stat } from "node:fs/promises";
+import { readFile, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import express, { type NextFunction, type Request, type Response } from "express";
 
@@ -14,6 +14,7 @@ import { logger } from "../utils/logger.js";
 import { checkVersions } from "../version-check.js";
 import { SkillStore, SkillStoreError } from "../skills/store.js";
 import { mergeVideos, type VideoMergeOptions } from "../video-merge.js";
+import { extractAudio, materializeMedia, renderMedia, type MediaInput, type MediaRenderOptions } from "../media-edit.js";
 
 /** 启动仅监听本机的 Canvas Agent HTTP 服务。 */
 export function startHttpServer() {
@@ -104,6 +105,7 @@ export function startHttpServer() {
     };
     const app = express();
     const videoMerges = new Map<string, { clientId: string; nodeIds: string[]; options: VideoMergeOptions; blobs: Map<number, Buffer> }>();
+    const mediaRenders = new Map<string, { clientId: string; nodeIds: string[]; inputs: Map<number, MediaInput> }>();
     app.disable("x-powered-by");
     app.use(express.json({ limit: "30mb" }));
     app.use((req, res, next) => {
@@ -178,6 +180,53 @@ export function startHttpServer() {
         videoMerges.delete(requestId);
         if (merge.blobs.size !== merge.nodeIds.length) return void res.status(400).json({ ok: false, error: "视频片段未上传完成" });
         const result = await mergeVideos(merge.nodeIds.map((_, index) => merge.blobs.get(index)!), merge.options);
+        res.setHeader("Cache-Control", "no-store");
+        res.setHeader("X-Video-Width", String(result.width));
+        res.setHeader("X-Video-Height", String(result.height));
+        res.setHeader("X-Video-Duration-Ms", String(result.durationMs));
+        res.type("video/mp4").send(result.data);
+    }));
+    app.post("/agent/media/:requestId/start", route(async (req, res) => {
+        const requestId = routeParam(req.params.requestId);
+        const clientId = String(req.query.clientId || "");
+        const name = String(req.body?.operation || "");
+        const toolName = name === "render" ? "canvas_render_media" : name === "transcribe" ? "canvas_transcribe_media" : "canvas_inspect_media";
+        if (!session.isPendingToolRequest(clientId, requestId, toolName)) return void res.status(409).json({ ok: false, error: "媒体请求已失效" });
+        const nodeIds = Array.isArray(req.body?.nodeIds) ? req.body.nodeIds.filter((value: unknown): value is string => typeof value === "string") : [];
+        if (!nodeIds.length) return void res.status(400).json({ ok: false, error: "没有可用媒体节点" });
+        mediaRenders.set(requestId, { clientId, nodeIds, inputs: new Map() });
+        const expiry = setTimeout(() => mediaRenders.delete(requestId), 300000);
+        expiry.unref();
+        res.json({ ok: true });
+    }));
+    app.put("/agent/media/:requestId/input/:index", express.raw({ type: "application/octet-stream", limit: "500mb" }), route(async (req, res) => {
+        const requestId = routeParam(req.params.requestId);
+        const media = mediaRenders.get(requestId);
+        const index = Number(routeParam(req.params.index));
+        const name = String(req.headers["x-media-name"] || "media");
+        const type = String(req.headers["x-media-type"] || "application/octet-stream");
+        if (!media || media.clientId !== String(req.query.clientId || "") || !Number.isInteger(index) || index < 0 || index >= media.nodeIds.length || !Buffer.isBuffer(req.body) || !req.body.length) return void res.status(400).json({ ok: false, error: "媒体片段无效" });
+        media.inputs.set(index, { name, type, data: req.body });
+        res.json({ ok: true });
+    }));
+    app.post("/agent/media/:requestId/complete", route(async (req, res) => {
+        const requestId = routeParam(req.params.requestId);
+        const media = mediaRenders.get(requestId);
+        if (!media || media.clientId !== String(req.query.clientId || "")) return void res.status(409).json({ ok: false, error: "媒体请求已失效" });
+        mediaRenders.delete(requestId);
+        if (media.inputs.size !== media.nodeIds.length) return void res.status(400).json({ ok: false, error: "媒体上传未完成" });
+        const inputs = media.nodeIds.map((_, index) => media.inputs.get(index)!);
+        if (req.body?.operation === "inspect") {
+            const workspace = ensureSiteWorkspace(config).workspacePath;
+            const directory = path.join(workspace, ".canvas-media", requestId);
+            await rm(directory, { recursive: true, force: true });
+            const files = await materializeMedia(inputs, directory);
+            return void res.json({ ok: true, items: files.map((item, index) => ({ nodeId: media.nodeIds[index], path: item.path, ...item.info })) });
+        }
+        if (req.body?.operation === "transcribe") return void res.type("audio/mp4").send(await extractAudio(inputs[0]));
+        const options = req.body?.options as MediaRenderOptions | undefined;
+        if (!options) return void res.status(400).json({ ok: false, error: "媒体渲染参数无效" });
+        const result = await renderMedia(inputs, options);
         res.setHeader("Cache-Control", "no-store");
         res.setHeader("X-Video-Width", String(result.width));
         res.setHeader("X-Video-Height", String(result.height));

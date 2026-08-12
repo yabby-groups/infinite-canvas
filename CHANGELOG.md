@@ -2,7 +2,11 @@
 
 ## Unreleased
 
+<<<<<<< HEAD
 + [新增] 提示词来源新增 Freestylefly GPT Image 2 内置来源。
+=======
++ [新增] Codex Agent 可自动读取当前画布本地图片、音频和视频，分析媒体信息、转写音轨、生成配音并渲染变速、混音和视觉效果成片为新节点。
+>>>>>>> 52f74cf (feat(agent): enable canvas multimedia editing)
 + [新增] Codex Agent 可在确认片段顺序后本地合并画布视频，自动创建成片节点并下载 MP4。
 
 ## v0.15.1 - 2026-08-07
