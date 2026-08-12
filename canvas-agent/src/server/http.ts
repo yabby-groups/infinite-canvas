@@ -20,6 +20,7 @@ import { extractAudio, materializeMedia, renderMedia, type MediaInput, type Medi
 export function startHttpServer() {
     const config = loadConfig(true);
     const port = Number(process.env.PORT) || Number(new URL(config.url).port) || DEFAULT_PORT;
+    const subdomain = commandOption("--subdomain");
     config.url = `http://127.0.0.1:${port}`;
     saveConfig(config);
 
@@ -523,25 +524,69 @@ export function startHttpServer() {
         res.status(500).json({ ok: false, error: error.message });
     });
 
-    app.listen(port, "127.0.0.1", () => {
-        console.log("Infinite Canvas Agent");
-        checkVersions();
-        console.log(`Local URL: ${config.url}`);
-        console.log(`Connect token: ${config.token}`);
-        console.log("Codex MCP is not installed by this command.");
-        console.log("Optional MCP add: codex mcp add infinite-canvas -- npx -y @basketikun/canvas-agent mcp");
-        console.log("Remove manually added MCP: codex mcp remove infinite-canvas");
-        if (logger.enabled) console.log(`Debug log: ${logger.filePath}`);
-        logger.info("Canvas Agent started", { url: config.url, workspace: ensureSiteWorkspace(config).workspacePath, debugLog: logger.filePath });
-        const activeThreadId = initialWorkspace.activeThreadId || "";
-        if (activeThreadId && session.beginCodexMutation()) {
-            void prepareExistingThread(activeThreadId).catch(async (error) => {
-                if (!isRecoverableThreadError(error)) return failPreparedConversation(error, activeThreadId);
-                session.beginConversation();
-                setActiveThread("", { emptyThread: true, draftThread: true }, true);
-                await prepareDraftThread("", "request");
-            }).finally(() => session.endCodexMutation()).catch(() => undefined);
-        }
+    const server = app.listen(port, "127.0.0.1", () => {
+        const args = ["http", ...(subdomain ? ["-subdomain", subdomain] : []), String(port)];
+        const tunnel = spawn("tunnel", args, { stdio: ["ignore", "pipe", "pipe"] });
+        let stopping = false;
+        let ready = false;
+        let readyTimeout: NodeJS.Timeout | undefined;
+        let tunnelOutput = "";
+        const stop = (code: number, error?: Error) => {
+            if (stopping) return;
+            stopping = true;
+            if (readyTimeout) clearTimeout(readyTimeout);
+            if (error) logger.error("Canvas Agent tunnel failed", { error });
+            tunnel.kill();
+            server.close(() => process.exit(code));
+            server.closeAllConnections();
+        };
+        const setPublicUrl = (url: string) => {
+            if (ready) return;
+            ready = true;
+            if (readyTimeout) clearTimeout(readyTimeout);
+            config.url = url;
+            saveConfig(config);
+            console.log("Infinite Canvas Agent");
+            checkVersions();
+            console.log(`Public URL: ${config.url}`);
+            console.log(`Connect token: ${config.token}`);
+            console.log("Codex MCP is not installed by this command.");
+            console.log("Optional MCP add: codex mcp add infinite-canvas -- npx -y @basketikun/canvas-agent mcp");
+            console.log("Remove manually added MCP: codex mcp remove infinite-canvas");
+            if (logger.enabled) console.log(`Debug log: ${logger.filePath}`);
+            logger.info("Canvas Agent started", { url: config.url, workspace: ensureSiteWorkspace(config).workspacePath, debugLog: logger.filePath });
+            const activeThreadId = initialWorkspace.activeThreadId || "";
+            if (activeThreadId && session.beginCodexMutation()) {
+                void prepareExistingThread(activeThreadId).catch(async (error) => {
+                    if (!isRecoverableThreadError(error)) return failPreparedConversation(error, activeThreadId);
+                    session.beginConversation();
+                    setActiveThread("", { emptyThread: true, draftThread: true }, true);
+                    await prepareDraftThread("", "request");
+                }).finally(() => session.endCodexMutation()).catch(() => undefined);
+            }
+        };
+        const consumeOutput = (output: NodeJS.ReadableStream, write: (chunk: string) => boolean) => output.on("data", (chunk: Buffer) => {
+            const text = chunk.toString();
+            write(text);
+            if (!subdomain) {
+                tunnelOutput = `${tunnelOutput}${text}`.slice(-4096);
+                const url = tunnelOutput.match(/https:\/\/[^\s/]+/)?.[0];
+                if (url) setPublicUrl(url);
+            }
+        });
+        if (tunnel.stdout) consumeOutput(tunnel.stdout, (text) => process.stdout.write(text));
+        if (tunnel.stderr) consumeOutput(tunnel.stderr, (text) => process.stderr.write(text));
+        tunnel.once("error", (error) => stop(1, error));
+        tunnel.once("exit", (code, signal) => {
+            if (!stopping) stop(1, new Error(`tunnel exited unexpectedly (${signal || code || "unknown"})`));
+        });
+        readyTimeout = setTimeout(() => stop(1, new Error("tunnel did not return a public URL within 30 seconds")), 30000);
+        tunnel.once("spawn", () => {
+            if (subdomain) setPublicUrl(`https://${subdomain}.huabot.com`);
+        });
+        const shutdown = () => stop(0);
+        process.once("SIGINT", shutdown);
+        process.once("SIGTERM", shutdown);
     });
 }
 
@@ -553,6 +598,11 @@ function route(handler: (req: Request, res: Response) => Promise<unknown>) {
 /** 从 Express 路由参数中读取单个字符串。 */
 function routeParam(value: string | string[]) {
     return Array.isArray(value) ? value[0] || "" : value;
+}
+
+function commandOption(name: string) {
+    const index = process.argv.indexOf(name);
+    return index >= 0 ? String(process.argv[index + 1] || "").trim() : "";
 }
 
 function permissionMode(value: unknown): AgentPermissionMode {

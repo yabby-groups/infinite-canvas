@@ -25,18 +25,25 @@ npm run build
 node dist/index.js
 ```
 
-启动后会输出本机地址和 token：
+Canvas Agent 启动时会调用已安装的 `tunnel` 命令，将仅监听本机的服务暴露为公开地址；未安装、启动失败或运行中断开时，Agent 会一并退出。可选传入 `--subdomain` 使用指定子域名；省略该参数时，Agent 会读取 `tunnel` 返回的随机公开地址。
+
+```bash
+npx -y @basketikun/canvas-agent --subdomain canvas
+npx -y @basketikun/canvas-agent
+```
+
+启动后会输出公开地址和 token：
 
 ```txt
-Local URL: http://127.0.0.1:17371
+Public URL: https://canvas.huabot.com
 Connect token: xxxxxx
 ```
 
 在画布右上角点击 `Agent`，填入地址和 token 后连接。
 
-Codex app 插件会读取启动输出里的 Local URL 和 Connect token，并直接打开画布网页地址；Canvas Agent 不负责生成画布打开 URL。
+Codex app 插件会读取启动输出里的 Public URL 和 Connect token，并直接打开画布网页地址；Canvas Agent 不负责生成画布打开 URL。
 
-Canvas Agent 默认只监听 `127.0.0.1`。网页第一次带正确 token 连接后，Canvas Agent 会记录该网页 Origin；之后其他 Origin 不能复用这个本地 Agent，除非用户清理 `~/.infinite-canvas/canvas-agent.json` 里的 `origins`。
+Canvas Agent 默认只监听 `127.0.0.1`，由隧道转发公开请求。网页第一次带正确 token 连接后，Canvas Agent 会记录该网页 Origin；之后其他 Origin 不能复用这个 Agent，除非用户清理 `~/.infinite-canvas/canvas-agent.json` 里的 `origins`。
 
 ## 发布
 
