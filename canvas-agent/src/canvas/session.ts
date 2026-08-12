@@ -12,6 +12,9 @@ type PendingRequest = { clientId: string; name: ToolName; resolve: (value: unkno
 type TurnAttachment = { clientId: string; id: string; name: string; type: string; size: number; width: number; height: number; dataUrl: string };
 type ReplayEvent = { type: string; payload: Record<string, unknown> };
 export type CodexState = { busy: boolean; threadId: string; turnId: string };
+
+export const CANVAS_TOOL_TIMEOUT_MS = 30_000;
+export const LONG_MEDIA_TOOL_TIMEOUT_MS = 30 * 60_000;
 export type McpStartupState = "starting" | "ready" | "failed" | "cancelled";
 export type ConversationState = {
     revision: number;
@@ -509,10 +512,14 @@ export class CanvasSession {
                 this.pending.delete(requestId);
                 logger.warn("Canvas tool request timed out", { requestId, name, clientId });
                 reject(new Error("画布操作超时"));
-            }, ["canvas_merge_videos", "canvas_render_media"].includes(name) ? 300000 : 30000);
+            }, canvasToolTimeout(name));
             this.pending.set(requestId, { clientId, name, resolve: (value) => (clearTimeout(timer), resolve(value)), reject: (error) => (clearTimeout(timer), reject(error)) });
         });
     }
+}
+
+export function canvasToolTimeout(name: ToolName) {
+    return ["canvas_merge_videos", "canvas_render_media"].includes(name) ? LONG_MEDIA_TOOL_TIMEOUT_MS : CANVAS_TOOL_TIMEOUT_MS;
 }
 
 /** 为运行中 turn 的可重放事件生成稳定键。 */

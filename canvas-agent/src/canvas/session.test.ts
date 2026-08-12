@@ -3,7 +3,7 @@ import type { ServerResponse } from "node:http";
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { CanvasSession } from "./session.js";
+import { CANVAS_TOOL_TIMEOUT_MS, CanvasSession, LONG_MEDIA_TOOL_TIMEOUT_MS, canvasToolTimeout } from "./session.js";
 
 test("MCP 读取当前激活网页的画布", async (t) => {
     const session = new CanvasSession();
@@ -164,6 +164,13 @@ test("视频合并仅允许发起网页提交媒体", async (t) => {
     assert.equal(session.isPendingToolRequest("second", requestId, "canvas_merge_videos"), false);
     session.resolveResult("first", { requestId, result: { ok: true } });
     assert.deepEqual(await result, { ok: true });
+});
+
+test("长媒体工具保留三十分钟等待窗口", () => {
+    assert.equal(canvasToolTimeout("canvas_merge_videos"), LONG_MEDIA_TOOL_TIMEOUT_MS);
+    assert.equal(canvasToolTimeout("canvas_render_media"), LONG_MEDIA_TOOL_TIMEOUT_MS);
+    assert.equal(LONG_MEDIA_TOOL_TIMEOUT_MS, 30 * 60_000);
+    assert.equal(canvasToolTimeout("canvas_create_text_node"), CANVAS_TOOL_TIMEOUT_MS);
 });
 
 test("活动网页关闭后回退到仍连接的画布", async (t) => {
