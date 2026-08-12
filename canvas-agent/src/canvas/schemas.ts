@@ -169,7 +169,7 @@ export const toolDescriptions: Record<ToolName, string> = {
     workbench_video_generate: "在视频创作台填入提示词并按需设置 model、size、seconds、resolution、generateAudio、watermark，run 默认 true 会自动点击生成按钮。会自动跳转到视频创作台。生成为异步过程，提交后返回 taskId，可用 generation_get_status 查询状态。",
     canvas_merge_videos: "将当前画布中的多个视频节点合并为 MP4。nodeIds 必须按用户已确认的最终顺序传入；先调用 canvas_get_state 列出候选片段并向用户确认顺序。可选 transition=cut（默认）或 fade；fade 未指定 transitionDurationMs 时使用 1000ms。成片会作为新视频节点插入画布并下载。",
     canvas_inspect_media: "读取当前画布指定媒体节点（默认全部）的本地 Blob，并返回图片/音频/视频的 MIME、字节数、时长、流、尺寸等真实媒体信息。此工具自动执行，媒体不会离开本机。",
-    canvas_render_media: "使用当前画布的本地媒体渲染新 MP4 视频节点。先用 canvas_inspect_media 确认节点和时长；videoNodeId 指定视频，audioNodeIds 可替换或混入音频。支持裁剪、0.25-4 倍变速、静音、音量、字幕烧录、灰阶/棕褐/增强对比度滤镜。原节点不修改，结果仅新增画布节点。",
+    canvas_render_media: "使用当前画布的本地媒体渲染新 MP4 视频节点。先用 canvas_inspect_media 确认节点和时长；videoNodeId 指定视频，audioNodeIds 会与原视频声音混音；mute=true 时移除全部声音。支持裁剪、0.25-4 倍变速、音量、字幕烧录、灰阶/棕褐/增强对比度滤镜。原节点不修改，结果仅新增画布节点。",
     canvas_generate_tts: "使用当前网页已有的音频生成配置将文本生成本地音频节点。不会把 API Key 交给本地 Agent；生成后可将返回的节点用于 canvas_render_media 配音。",
     canvas_transcribe_media: "转写当前画布一个音频或视频节点的语音内容。媒体先在本地提取音轨，再由网页使用已有 API 配置转写；API Key 不会传给本地 Agent。",
     prompts_search: "搜索提示词库（第三方提示词合集），支持 keyword、category、tags 过滤和 page/pageSize 分页，返回标题、提示词、分类、标签、封面等。",

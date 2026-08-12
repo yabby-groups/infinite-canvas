@@ -60,9 +60,10 @@ export async function renderMedia(inputs: MediaInput[], options: MediaRenderOpti
         const args = files.flatMap((file) => ["-i", file]);
         const filter = [`[${options.videoIndex}:v]${videoFilters.join(",")}[v]`];
         const maps = ["-map", "[v]"];
-        const useAudio = !options.mute && (audioIndexes.length > 0 || video.streams.some((stream) => stream.startsWith("audio:")));
+        const videoHasAudio = video.streams.some((stream) => stream.startsWith("audio:"));
+        const useAudio = !options.mute && (audioIndexes.length > 0 || videoHasAudio);
         if (useAudio) {
-            const audioInputs = audioIndexes.length ? audioIndexes : [options.videoIndex];
+            const audioInputs = videoHasAudio ? [options.videoIndex, ...audioIndexes] : audioIndexes;
             const audioFilters = audioInputs.map((index, item) => `[${index}:a]atrim=start=${start}${end > start ? `:end=${end}` : ""},asetpts=PTS-STARTPTS,${audioTempo(speed)}${options.volume ? `,volume=${Math.max(0, Math.min(4, options.volume))}` : ""}[a${item}]`);
             filter.push(...audioFilters, audioInputs.length === 1 ? "[a0]anull[a]" : `${audioInputs.map((_, item) => `[a${item}]`).join("")}amix=inputs=${audioInputs.length}:duration=longest[a]`);
             maps.push("-map", "[a]");
