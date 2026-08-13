@@ -2,6 +2,7 @@
 
 ## Unreleased
 
++ [优化] Canvas Agent 内置 Codex 升级至 0.147.0，与本机 Codex 版本检查保持一致。
 + [调整] Canvas Agent 发送工具请求前强制完整校验参数，参数错误即停止发送且不自动重试。
 + [新增] 提示词来源新增 Freestylefly GPT Image 2 内置来源。
 + [新增] Canvas Agent 启动时自动建立公开隧道，支持指定子域名或使用服务返回的随机域名连接本机画布服务。
